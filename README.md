@@ -12,6 +12,6 @@ We would open up the .ps1 file and add in my email address where it says "$UserP
 
 So it would look like this:
 
-$UserPrincipalName = "daniel@email.com"
+$UserPrincipalName = "user.name@email.com"
 
 Then save and run the command from PowerShell, please note it will take a few minutes before giving you the list.
