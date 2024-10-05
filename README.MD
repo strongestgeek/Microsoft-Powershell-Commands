@@ -12,11 +12,11 @@
 3. Navigate to the directory containing the scripts:
 
    ```bash
-cd Exchange-Management-Utility-Scripts
+   cd Exchange-Management-Utility-Scripts
 
 4. Run any of the scripts as needed by executing:
    ```bash
-.\ScriptName.ps1
+   .\ScriptName.ps1
 
 ## Contributions
 Contributions are welcome! If you have suggestions or improvements, please submit a pull request.
