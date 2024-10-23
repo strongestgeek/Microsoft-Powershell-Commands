@@ -48,7 +48,7 @@ function Get-DistributionGroupMembersRecursively {
         } else {
             # Add the non-distribution list member to the result
             $allMembers += New-Object PSObject -Property @{
-                Name = $member.Name
+                Name = $member.DisplayName
                 EmailAddress = $member.PrimarySmtpAddress
                 RecipientType = $member.RecipientType
                 ParentGroup = $DistributionGroup
