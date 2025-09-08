@@ -2,73 +2,217 @@
     Get-FullDistributionListMembers.ps1
 
     Description:
-    This script retrieves all members of a specified distribution list, including any 
-    nested distribution lists, recursively. It collects the members of the top-level 
-    distribution group and drills down into any nested groups to retrieve their members 
-    as well. The script exports the results to a CSV file, including details such as 
-    member name, email address, recipient type, and the parent group they belong to.
+    This script provides a comprehensive view of email flow within an organisation by:
+    - Retrieving all members of distribution lists (including nested ones)
+    - Identifying shared mailboxes and their delegates
+    - Tracking forward rules (both internal and external)
+    - Mapping the complete path an email would take
 
     Usage:
-    - Set `$distributionList` to the alias or name of the distribution group you want to 
-      start with.
-    - Run the script in an Exchange Management Shell or a PowerShell session with the 
-      necessary permissions to retrieve distribution group members.
-    - The results will be exported to a CSV file named after the specified distribution 
-      group (e.g., "YourDistributionList All Members.csv").
+    - Run the script in Exchange Management Shell
+    - Enter the target email address when prompted
+    - Results will be exported to a CSV file
 
     Requirements:
-    - Exchange Management Shell or the appropriate PowerShell modules for Exchange Online 
-      or on-premise Exchange Server.
-    - Sufficient permissions to run `Get-DistributionGroupMember` and query nested groups.
-
-    Output:
-    - A CSV file containing the name, email address, recipient type, and parent group of 
-      each member retrieved from the distribution group and any nested groups.
+    - Exchange Management Shell or Exchange Online PowerShell modules
+    - Appropriate permissions to query distribution groups, mailboxes, and forward rules
 #>
 
-
-# Function to retrieve members of a distribution list recursively
-function Get-DistributionGroupMembersRecursively {
+# Function to get mailbox type (User/Shared/Distribution List)
+function Get-MailboxType {
     param (
-        [string]$DistributionGroup
+        [string]$EmailAddress
     )
     
-    # Initialize an array to hold all members
-    $allMembers = @()
+    try {
+        $recipient = Get-Recipient -Identity $EmailAddress -ErrorAction Stop
+        $mailbox = Get-Mailbox -Identity $EmailAddress -ErrorAction SilentlyContinue
 
-    # Get all members of the distribution list
-    $members = Get-DistributionGroupMember -Identity $DistributionGroup -ResultSize Unlimited
+        if ($recipient.RecipientType -eq 'MailUniversalDistributionGroup' -or 
+            $recipient.RecipientType -eq 'MailUniversalSecurityGroup') {
+            return "Distribution List"
+        }
+        elseif ($mailbox.IsShared) {
+            return "Shared Mailbox"
+        }
+        else {
+            return "User Mailbox"
+        }
+    }
+    catch {
+        return "External Email"
+    }
+}
 
-    foreach ($member in $members) {
-        # Check if the member is another distribution list
-        if ($member.RecipientType -eq 'MailUniversalDistributionGroup' -or $member.RecipientType -eq 'MailUniversalSecurityGroup') {
-            # Recursively get members of the nested distribution list
-            $nestedMembers = Get-DistributionGroupMembersRecursively -DistributionGroup $member.Alias
-            $allMembers += $nestedMembers
-        } else {
-            # Add the non-distribution list member to the result
-            $allMembers += New-Object PSObject -Property @{
-                Name = $member.DisplayName
-                EmailAddress = $member.PrimarySmtpAddress
-                RecipientType = $member.RecipientType
-                ParentGroup = $DistributionGroup
+# Function to get mailbox delegates and forwards
+function Get-MailboxDelegatesAndForwards {
+    param (
+        [string]$EmailAddress,
+        [string]$PathSoFar,
+        [System.Collections.ArrayList]$VisitedMailboxes
+    )
+
+    if ($null -eq $VisitedMailboxes) {
+        $VisitedMailboxes = New-Object System.Collections.ArrayList
+    }
+
+    $results = @()
+    
+    # Skip if we've already processed this mailbox
+    if ($VisitedMailboxes -contains $EmailAddress) {
+        return $results
+    }
+    
+    [void]$VisitedMailboxes.Add($EmailAddress)
+    
+    try {
+        $mailbox = Get-Mailbox -Identity $EmailAddress -ErrorAction SilentlyContinue
+        
+        if ($mailbox) {
+            # Get delegates (Full Access permissions)
+            $delegates = Get-MailboxPermission -Identity $EmailAddress | 
+                Where-Object {
+                    $_.AccessRights -contains "FullAccess" -and 
+                    $_.User -notlike "NT AUTHORITY\*" -and 
+                    $_.User -ne "Organization Management"
+                }
+            
+            foreach ($delegate in $delegates) {
+                $delegateEmail = (Get-Recipient $delegate.User -ErrorAction SilentlyContinue).PrimarySmtpAddress
+                if ($delegateEmail) {
+                    $results += [PSCustomObject]@{
+                        Name = (Get-Recipient $delegate.User).DisplayName
+                        EmailAddress = $delegateEmail
+                        Type = Get-MailboxType -EmailAddress $delegateEmail
+                        Relationship = "Delegate"
+                        Path = "$PathSoFar -> $delegateEmail (Delegate)"
+                    }
+                }
+            }
+
+            # Get forwarding rules
+            if ($mailbox.ForwardingSmtpAddress) {
+                $forwardEmail = $mailbox.ForwardingSmtpAddress -replace "SMTP:"
+                $results += [PSCustomObject]@{
+                    Name = $forwardEmail
+                    EmailAddress = $forwardEmail
+                    Type = Get-MailboxType -EmailAddress $forwardEmail
+                    Relationship = "Forward"
+                    Path = "$PathSoFar -> $forwardEmail (Forward)"
+                }
+
+                # Recursively check forwarding destination if not already visited
+                if ($VisitedMailboxes -notcontains $forwardEmail) {
+                    $subResults = Get-MailboxDelegatesAndForwards -EmailAddress $forwardEmail `
+                        -PathSoFar "$PathSoFar -> $forwardEmail" `
+                        -VisitedMailboxes $VisitedMailboxes
+                    $results += $subResults
+                }
             }
         }
     }
+    catch {
+        Write-Warning "Error processing mailbox $EmailAddress : $_"
+    }
 
-    return $allMembers
+    return $results
 }
 
-# Define the distribution list to start with
-$distributionList = "YourDistributionList" # Enter your target distribution list here
+# Function to process distribution group flow
+function Get-DistributionFlow {
+    param (
+        [string]$DistributionGroup,
+        [string]$PathSoFar,
+        [System.Collections.ArrayList]$VisitedMailboxes
+    )
 
-# Call the recursive function to get all members
-$allMembers = Get-DistributionGroupMembersRecursively -DistributionGroup $distributionList
+    if ($null -eq $VisitedMailboxes) {
+        $VisitedMailboxes = New-Object System.Collections.ArrayList
+    }
 
-# Define the CSV file name with the distribution list name
-$csvFileName = "$distributionList All Members.csv"
+    $results = @()
+    
+    try {
+        $members = Get-DistributionGroupMember -Identity $DistributionGroup -ResultSize Unlimited
+        
+        foreach ($member in $members) {
+            $currentPath = if ($PathSoFar) { "$PathSoFar -> $($member.PrimarySmtpAddress)" } 
+                          else { $member.PrimarySmtpAddress }
+            
+            $memberType = Get-MailboxType -EmailAddress $member.PrimarySmtpAddress
+            
+            $results += [PSCustomObject]@{
+                Name = $member.DisplayName
+                EmailAddress = $member.PrimarySmtpAddress
+                Type = $memberType
+                Relationship = "Member"
+                Path = $currentPath
+            }
 
-# Export to CSV
-$allMembers | Select-Object Name, EmailAddress, RecipientType, ParentGroup | Export-Csv -Path $csvFileName -NoTypeInformation
+            # If it's a distribution group, process its members
+            if ($memberType -eq "Distribution List") {
+                $subResults = Get-DistributionFlow -DistributionGroup $member.PrimarySmtpAddress `
+                    -PathSoFar $currentPath `
+                    -VisitedMailboxes $VisitedMailboxes
+                $results += $subResults
+            }
+            # If it's a mailbox, get delegates and forwards
+            else {
+                $delegateResults = Get-MailboxDelegatesAndForwards -EmailAddress $member.PrimarySmtpAddress `
+                    -PathSoFar $currentPath `
+                    -VisitedMailboxes $VisitedMailboxes
+                $results += $delegateResults
+            }
+        }
+    }
+    catch {
+        Write-Warning "Error processing distribution group $DistributionGroup : $_"
+    }
 
-Write-Host "Export completed. Members are saved in $csvFileName"
+    return $results
+}
+
+# Main script
+try {
+    # Get email address from user
+    $startDL = Read-Host "Enter the email address to analyse"
+    
+    Write-Host "Analysing email flow for $startDL..."
+    
+    # Initialise visited mailboxes tracking
+    $VisitedMailboxes = New-Object System.Collections.ArrayList
+
+    # Get the initial type
+    $initialType = Get-MailboxType -EmailAddress $startDL
+
+    # Initialise results array with the starting point
+    $allResults = @([PSCustomObject]@{
+        Name = (Get-Recipient $startDL).DisplayName
+        EmailAddress = $startDL
+        Type = $initialType
+        Relationship = "Starting Point"
+        Path = $startDL
+    })
+
+    # Process based on type
+    if ($initialType -eq "Distribution List") {
+        $allResults += Get-DistributionFlow -DistributionGroup $startDL `
+            -VisitedMailboxes $VisitedMailboxes
+    }
+    else {
+        $allResults += Get-MailboxDelegatesAndForwards -EmailAddress $startDL `
+            -PathSoFar $startDL `
+            -VisitedMailboxes $VisitedMailboxes
+    }
+
+    # Export results to CSV
+    $csvFileName = "$startDL - Email Flow Analysis.csv"
+    $allResults | Select-Object Name, EmailAddress, Type, Relationship, Path | 
+        Export-Csv -Path $csvFileName -NoTypeInformation
+
+    Write-Host "Analysis completed. Results saved to $csvFileName"
+    Write-Host "Total items processed: $($allResults.Count)"
+}
+catch {
+    Write-Error "An error occurred: $_"
+}
