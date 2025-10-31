@@ -39,26 +39,24 @@ foreach ($Member in $Members) {
     Write-Progress -Activity "Processing Members" -Status "Member $Counter of $($Members.Count)" -PercentComplete (($Counter / $Members.Count) * 100)
     
     # Get detailed user information
-    $User = Get-MgUser -UserId $Member.Id -Property "DisplayName,Mail,UserPrincipalName,JobTitle,Department,OfficeLocation,Manager"
+    $User = Get-MgUser -UserId $Member.Id -Property "DisplayName,Mail,UserPrincipalName,JobTitle,Department,OfficeLocation"
     
     # Get manager details if manager exists
     $ManagerName = $null
     $ManagerJobTitle = $null
     $ManagerDepartment = $null
     
-    if ($User.Manager) {
-        try {
-            $Manager = Get-MgUserManager -UserId $User.Id
-            if ($Manager) {
-                $ManagerDetails = Get-MgUser -UserId $Manager.Id -Property "DisplayName,JobTitle,Department"
-                $ManagerName = $ManagerDetails.DisplayName
-                $ManagerJobTitle = $ManagerDetails.JobTitle
-                $ManagerDepartment = $ManagerDetails.Department
-            }
+    try {
+        $Manager = Get-MgUserManager -UserId $User.Id -ErrorAction Stop
+        if ($Manager) {
+            $ManagerDetails = Get-MgUser -UserId $Manager.Id -Property "DisplayName,JobTitle,Department" -ErrorAction Stop
+            $ManagerName = $ManagerDetails.DisplayName
+            $ManagerJobTitle = $ManagerDetails.JobTitle
+            $ManagerDepartment = $ManagerDetails.Department
         }
-        catch {
-            Write-Warning "Could not retrieve manager for $($User.DisplayName)"
-        }
+    }
+    catch {
+        # Manager not set or inaccessible - leave fields as $null
     }
     
     # Create custom object with all required information
