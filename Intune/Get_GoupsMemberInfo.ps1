@@ -38,8 +38,20 @@ foreach ($Member in $Members) {
     $Counter++
     Write-Progress -Activity "Processing Members" -Status "Member $Counter of $($Members.Count)" -PercentComplete (($Counter / $Members.Count) * 100)
     
+    # Skip non-user objects (groups, service principals, etc.)
+    if ($Member.AdditionalProperties['@odata.type'] -ne '#microsoft.graph.user') {
+        Write-Host "`nSkipping non-user object: $($Member.Id)" -ForegroundColor Gray
+        continue
+    }
+    
     # Get detailed user information
-    $User = Get-MgUser -UserId $Member.Id -Property "DisplayName,Mail,UserPrincipalName,JobTitle,Department,OfficeLocation"
+    try {
+        $User = Get-MgUser -UserId $Member.Id -Property "DisplayName,Mail,UserPrincipalName,JobTitle,Department,OfficeLocation" -ErrorAction Stop
+    }
+    catch {
+        Write-Host "`nERROR: Could not retrieve user for ID: $($Member.Id) - $($_.Exception.Message)" -ForegroundColor Red
+        continue
+    }
     
     Write-Host "`nProcessing: $($User.DisplayName)" -ForegroundColor Yellow
     
@@ -63,7 +75,7 @@ foreach ($Member in $Members) {
         }
     }
     catch {
-        Write-Host "  ERROR: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "  No manager set or inaccessible" -ForegroundColor Gray
     }
     
     # Create custom object with all required information
