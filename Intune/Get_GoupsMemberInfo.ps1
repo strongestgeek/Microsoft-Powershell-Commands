@@ -46,7 +46,7 @@ foreach ($Member in $Members) {
     
     # Get detailed user information
     try {
-        $User = Get-MgUser -UserId $Member.Id -Property "DisplayName,Mail,UserPrincipalName,JobTitle,Department,OfficeLocation" -ErrorAction Stop
+        $User = Get-MgUser -UserId $Member.Id -Property "Id,DisplayName,Mail,UserPrincipalName,JobTitle,Department,OfficeLocation" -ErrorAction Stop
     }
     catch {
         Write-Host "`nERROR: Could not retrieve user for ID: $($Member.Id) - $($_.Exception.Message)" -ForegroundColor Red
