@@ -41,22 +41,29 @@ foreach ($Member in $Members) {
     # Get detailed user information
     $User = Get-MgUser -UserId $Member.Id -Property "DisplayName,Mail,UserPrincipalName,JobTitle,Department,OfficeLocation"
     
+    Write-Host "`nProcessing: $($User.DisplayName)" -ForegroundColor Yellow
+    
     # Get manager details if manager exists
     $ManagerName = $null
     $ManagerJobTitle = $null
     $ManagerDepartment = $null
     
     try {
+        Write-Host "  Attempting to get manager..." -ForegroundColor Cyan
         $Manager = Get-MgUserManager -UserId $User.Id -ErrorAction Stop
+        Write-Host "  Manager object retrieved: $($Manager -ne $null)" -ForegroundColor Cyan
+        Write-Host "  Manager ID: $($Manager.Id)" -ForegroundColor Cyan
+        
         if ($Manager) {
             $ManagerDetails = Get-MgUser -UserId $Manager.Id -Property "DisplayName,JobTitle,Department" -ErrorAction Stop
+            Write-Host "  Manager details retrieved: $($ManagerDetails.DisplayName)" -ForegroundColor Green
             $ManagerName = $ManagerDetails.DisplayName
             $ManagerJobTitle = $ManagerDetails.JobTitle
             $ManagerDepartment = $ManagerDetails.Department
         }
     }
     catch {
-        # Manager not set or inaccessible - leave fields as $null
+        Write-Host "  ERROR: $($_.Exception.Message)" -ForegroundColor Red
     }
     
     # Create custom object with all required information
