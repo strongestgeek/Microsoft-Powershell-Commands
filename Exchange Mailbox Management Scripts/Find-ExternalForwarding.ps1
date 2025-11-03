@@ -76,6 +76,8 @@ Write-Host ""
 # Process mailboxes in parallel
 Write-Host "Scanning for forwarding rules (this may take several minutes)..." -ForegroundColor Yellow
 $startTime = Get-Date
+$processedCount = 0
+$totalCount = $mailboxes.Count
 
 $results = $mailboxes | ForEach-Object -Parallel {
     $mailbox = $_
@@ -145,11 +147,10 @@ $results = $mailboxes | ForEach-Object -Parallel {
             }
         }
         
-        # Output progress
-        $completed = $using:mailboxes.IndexOf($mailbox) + 1
-        $total = $using:mailboxes.Count
-        if ($completed % 50 -eq 0) {
-            Write-Host "Progress: $completed / $total mailboxes processed" -ForegroundColor Gray
+        # Output periodic progress updates
+        $syncCount = [System.Threading.Interlocked]::Increment([ref]$using:processedCount)
+        if ($syncCount % 100 -eq 0) {
+            Write-Host "Progress: $syncCount / $($using:totalCount) mailboxes processed" -ForegroundColor Gray
         }
         
         return $mailboxResults
