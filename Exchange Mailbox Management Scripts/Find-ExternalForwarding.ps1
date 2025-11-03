@@ -8,34 +8,11 @@
 # Configuration
 $organizationDomains = @("contoso.com", "contoso.co.uk")  # Replace with your organization's domains
 $exportPath = "ExternalForwardingRules_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+$throttleLimit = 10  # Number of concurrent operations
 
 # ============================================================================
 # Functions
 # ============================================================================
-
-function Test-ExternalAddress {
-    param([string]$Address, [array]$InternalDomains)
-    
-    if ([string]::IsNullOrWhiteSpace($Address)) {
-        return $false
-    }
-    
-    # Extract email from Exchange format: "Display Name [email@domain.com]"
-    if ($Address -match '\[([^\]]+)\]') {
-        $email = $Matches[1]
-    } else {
-        $email = $Address
-    }
-    
-    # Check if email domain matches any internal domain
-    foreach ($domain in $InternalDomains) {
-        if ($email -like "*@$domain") {
-            return $false
-        }
-    }
-    
-    return $true
-}
 
 function Parse-ForwardingAddress {
     param([string]$Address)
@@ -50,6 +27,23 @@ function Parse-ForwardingAddress {
     }
     
     return $Address
+}
+
+function Test-ExternalAddress {
+    param([string]$EmailAddress, [array]$InternalDomains)
+    
+    if ([string]::IsNullOrWhiteSpace($EmailAddress)) {
+        return $false
+    }
+    
+    # Check if email domain matches any internal domain
+    foreach ($domain in $InternalDomains) {
+        if ($EmailAddress -like "*@$domain") {
+            return $false
+        }
+    }
+    
+    return $true
 }
 
 # ============================================================================
@@ -73,93 +67,104 @@ Write-Host "Found $($sharedMailboxes.Count) shared mailboxes" -ForegroundColor G
 Write-Host "Total: $($mailboxes.Count) mailboxes" -ForegroundColor Green
 Write-Host ""
 
-# Process mailboxes in parallel
+# Process mailboxes with throttling
 Write-Host "Scanning for forwarding rules (this may take several minutes)..." -ForegroundColor Yellow
 $startTime = Get-Date
+
+$results = @()
 $processedCount = 0
 $totalCount = $mailboxes.Count
 
-$results = $mailboxes | ForEach-Object -Parallel {
-    $mailbox = $_
-    $domains = $using:organizationDomains
+# Process in batches for better performance
+$batchSize = $throttleLimit
+for ($i = 0; $i -lt $mailboxes.Count; $i += $batchSize) {
+    $batch = $mailboxes[$i..[Math]::Min($i + $batchSize - 1, $mailboxes.Count - 1)]
     
-    try {
-        $rules = Get-InboxRule -Mailbox $mailbox.UserPrincipalName -ErrorAction SilentlyContinue
+    $batchResults = $batch | ForEach-Object -ThrottleLimit $throttleLimit -Parallel {
+        $mailbox = $_
+        $domains = $using:organizationDomains
         
-        $mailboxResults = @()
-        
-        foreach ($rule in $rules) {
-            if ($rule.ForwardTo -or $rule.ForwardAsAttachmentTo -or $rule.RedirectTo) {
-                
-                $allForwardingAddresses = @()
-                $allForwardingAddresses += $rule.ForwardTo | ForEach-Object { $_.ToString() }
-                $allForwardingAddresses += $rule.ForwardAsAttachmentTo | ForEach-Object { $_.ToString() }
-                $allForwardingAddresses += $rule.RedirectTo | ForEach-Object { $_.ToString() }
-                $allForwardingAddresses = $allForwardingAddresses | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-                
-                # Check if any address is external
-                $hasExternalForwarding = $false
-                foreach ($addr in $allForwardingAddresses) {
-                    # Extract email from Exchange format
-                    if ($addr -match '\[([^\]]+)\]') {
-                        $email = $Matches[1]
-                    } else {
-                        $email = $addr
+        try {
+            $rules = Get-InboxRule -Mailbox $mailbox.UserPrincipalName -ErrorAction Stop
+            
+            $mailboxResults = @()
+            
+            foreach ($rule in $rules) {
+                if ($rule.ForwardTo -or $rule.ForwardAsAttachmentTo -or $rule.RedirectTo) {
+                    
+                    $allForwardingAddresses = @()
+                    
+                    # Collect all forwarding addresses
+                    if ($rule.ForwardTo) {
+                        $allForwardingAddresses += $rule.ForwardTo | ForEach-Object { $_.ToString() }
+                    }
+                    if ($rule.ForwardAsAttachmentTo) {
+                        $allForwardingAddresses += $rule.ForwardAsAttachmentTo | ForEach-Object { $_.ToString() }
+                    }
+                    if ($rule.RedirectTo) {
+                        $allForwardingAddresses += $rule.RedirectTo | ForEach-Object { $_.ToString() }
                     }
                     
-                    # Check if external
-                    $isExternal = $true
-                    foreach ($domain in $domains) {
-                        if ($email -like "*@$domain") {
-                            $isExternal = $false
-                            break
-                        }
-                    }
+                    $allForwardingAddresses = $allForwardingAddresses | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
                     
-                    if ($isExternal) {
-                        $hasExternalForwarding = $true
-                        break
-                    }
-                }
-                
-                # Only include rules with external forwarding
-                if ($hasExternalForwarding) {
-                    # Parse addresses for cleaner display
-                    $parsedAddresses = $allForwardingAddresses | ForEach-Object {
-                        if ($_ -match '\[([^\]]+)\]') {
+                    # Check if any address is external
+                    $hasExternalForwarding = $false
+                    $parsedAddresses = @()
+                    
+                    foreach ($addr in $allForwardingAddresses) {
+                        # Extract email from Exchange format
+                        $email = if ($addr -match '\[([^\]]+)\]') {
                             $Matches[1]
                         } else {
-                            $_
+                            $addr
+                        }
+                        
+                        $parsedAddresses += $email
+                        
+                        # Check if external
+                        $isExternal = $true
+                        foreach ($domain in $domains) {
+                            if ($email -like "*@$domain") {
+                                $isExternal = $false
+                                break
+                            }
+                        }
+                        
+                        if ($isExternal) {
+                            $hasExternalForwarding = $true
                         }
                     }
                     
-                    $mailboxResults += [PSCustomObject]@{
-                        MailboxType = $mailbox.RecipientTypeDetails
-                        Mailbox = $mailbox.DisplayName
-                        UserPrincipalName = $mailbox.UserPrincipalName
-                        RuleName = $rule.Name
-                        RuleEnabled = $rule.Enabled
-                        ForwardingTo = ($parsedAddresses -join "; ")
-                        ExternalForwarding = "Yes"
-                        RuleDescription = $rule.Description
+                    # Only include rules with external forwarding
+                    if ($hasExternalForwarding) {
+                        $mailboxResults += [PSCustomObject]@{
+                            MailboxType = $mailbox.RecipientTypeDetails
+                            Mailbox = $mailbox.DisplayName
+                            UserPrincipalName = $mailbox.UserPrincipalName
+                            RuleName = $rule.Name
+                            RuleEnabled = $rule.Enabled
+                            ForwardingTo = ($parsedAddresses -join "; ")
+                            ExternalForwarding = "Yes"
+                            RuleDescription = $rule.Description
+                        }
                     }
                 }
             }
+            
+            return $mailboxResults
         }
-        
-        # Output periodic progress updates
-        $syncCount = [System.Threading.Interlocked]::Increment([ref]$using:processedCount)
-        if ($syncCount % 100 -eq 0) {
-            Write-Host "Progress: $syncCount / $($using:totalCount) mailboxes processed" -ForegroundColor Gray
+        catch {
+            Write-Warning "Error processing mailbox: $($mailbox.UserPrincipalName) - $($_.Exception.Message)"
+            return $null
         }
-        
-        return $mailboxResults
     }
-    catch {
-        Write-Warning "Error processing mailbox: $($mailbox.UserPrincipalName) - $($_.Exception.Message)"
-        return $null
-    }
-} | Where-Object { $_ -ne $null }
+    
+    $results += $batchResults | Where-Object { $_ -ne $null }
+    
+    $processedCount += $batch.Count
+    $percentComplete = [Math]::Round(($processedCount / $totalCount) * 100, 1)
+    Write-Host "Progress: $processedCount / $totalCount mailboxes processed ($percentComplete%)" -ForegroundColor Gray
+}
 
 $endTime = Get-Date
 $duration = $endTime - $startTime
