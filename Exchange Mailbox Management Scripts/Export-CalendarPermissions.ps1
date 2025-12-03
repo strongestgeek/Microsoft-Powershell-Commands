@@ -41,8 +41,10 @@ foreach ($mailbox in $mailboxes) {
     $calendar = "$($mailbox.UserPrincipalName):\Calendar"
     try {
         $permissions = Get-MailboxFolderPermission -Identity $calendar -ErrorAction SilentlyContinue | 
-                       Where-Object { $_.User -like "Default" -or $_.User -like "Anonymous" }
-        
+                        Where-Object {
+                        ($_.User -like "Default" -or $_.User -like "Anonymous") -and
+                        ($_.AccessRights -notcontains "None" -and $_.AccessRights -notcontains "AvailabilityOnly")
+                        }
         if ($permissions) {
             foreach ($permission in $permissions) {
                 $results += [PSCustomObject]@{
@@ -50,11 +52,9 @@ foreach ($mailbox in $mailboxes) {
                     User          = $permission.User
                     AccessRights  = $permission.AccessRights -join ", "
                 }
-                
             }
         }
         else {
-            
         }
     }
     catch {
@@ -82,5 +82,6 @@ if ($results) {
 # Disconnect from Exchange Online
 Write-Host "Disconnecting from Exchange Online..." -ForegroundColor Cyan
 Disconnect-ExchangeOnline -Confirm:$false
+
 
 Write-Host "Script completed. Check CSV at $csvFile (if results were found)." -ForegroundColor Green
