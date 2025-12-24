@@ -48,13 +48,24 @@ $results = foreach ($u in $allUsers) {
         elseif ($friendlyLics -match "E3|E5|Business Premium") { $status = "Optimization"; $notes = "Remove full license from Shared" }
     } else {
         # USER ACCOUNT LOGIC
-        if ($friendlyLics -contains "M365 E5" -and $friendlyLics -contains "O365 E3") {
-            $status = "Redundant"; $notes = "User has E5 and E3; remove E3 to save cost"
-        }
-        elseif ($friendlyLics -contains "M365 E3 (No Teams)" -and $friendlyLics -notmatch "Teams") {
-            $status = "Warning"; $notes = "Missing Teams license for E3 (No Teams) SKU"
-        }
+            # UPDATED USER ACCOUNT LOGIC
+    $hasE5 = $friendlyLics -contains "M365 E5"
+    $hasE3 = $friendlyLics -contains "O365 E3" -or $friendlyLics -contains "M365 E3 (No Teams)"
+    
+    # 1. Redundant Bundle Check
+    if ($hasE5 -and $hasE3) {
+        $status = "Redundant"; $notes = "Remove E3 (E5 covers everything)"
     }
+    # 2. Add-on Overlap Check (e.g., Entra ID P1/P2 or Intune)
+    elseif (($hasE5 -or $hasE3) -and ($friendlyLics -match "Entra ID|Intune|AIP")) {
+        $status = "Optimization"; $notes = "Check for redundant standalone Security/Identity add-ons"
+    }
+    # 3. Teams Essentials Redundancy
+    elseif ($friendlyLics -contains "Microsoft Teams Essentials" -and ($friendlyLics -match "Business|E3|E5")) {
+        $status = "Redundant"; $notes = "Teams Essentials is included in the main bundle"
+    }
+
+}
 
     [PSCustomObject]@{
         User        = $upn
