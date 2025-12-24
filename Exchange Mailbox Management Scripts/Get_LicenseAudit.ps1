@@ -63,6 +63,26 @@ $results = foreach ($u in $allUsers) {
     }
 }
 
+
+    # UPDATED USER ACCOUNT LOGIC
+    $hasE5 = $friendlyLics -contains "M365 E5"
+    $hasE3 = $friendlyLics -contains "O365 E3" -or $friendlyLics -contains "M365 E3 (No Teams)"
+    
+    # 1. Redundant Bundle Check
+    if ($hasE5 -and $hasE3) {
+        $status = "Redundant"; $notes = "Remove E3 (E5 covers everything)"
+    }
+    # 2. Add-on Overlap Check (e.g., Entra ID P1/P2 or Intune)
+    elseif (($hasE5 -or $hasE3) -and ($friendlyLics -match "Entra ID|Intune|AIP")) {
+        $status = "Optimization"; $notes = "Check for redundant standalone Security/Identity add-ons"
+    }
+    # 3. Teams Essentials Redundancy
+    elseif ($friendlyLics -contains "Microsoft Teams Essentials" -and ($friendlyLics -match "Business|E3|E5")) {
+        $status = "Redundant"; $notes = "Teams Essentials is included in the main bundle"
+    }
+
+
+
 # 5. Export and Close
 $results | Export-Csv -Path ".\M365_Audit.csv" -NoTypeInformation
 Disconnect-ExchangeOnline -Confirm:$false
