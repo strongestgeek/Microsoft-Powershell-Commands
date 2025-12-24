@@ -132,4 +132,4 @@ Write-Host "`nAudit Complete!" -ForegroundColor Green
 Write-Host "Total objects processed: $($results.Count)" -ForegroundColor Cyan
 Write-Host "`nStatus Summary:" -ForegroundColor Yellow
 $summary | Format-Table -AutoSize
-Write-Host "Report saved to: $outputPath" -
+Write-Host "Report saved to: $outputPath" -ForegroundColor Cyan
