@@ -24,12 +24,84 @@ $sharedMailboxes = Get-EXOMailbox -RecipientTypeDetails SharedMailbox -ResultSiz
 
 # Fast Lookups
 $licenseLookup = @{}
-foreach ($u in $allUsers) { $licenseLookup[$u.UserPrincipalName.ToLower()] = $u }
-$sharedSet = New-Object System.Collections.Generic.HashSet[string] ([string[]]$sharedMailboxes.UserPrincipalName, [System.StringComparer]::OrdinalIgnoreCase)
+foreach ($u in $allUsers) { 
+    if ($u.UserPrincipalName) { $licenseLookup[$u.UserPrincipalName.ToLower()] = $u } 
+}
+
+$upnArray = [string[]]($sharedMailboxes.UserPrincipalName)
+$sharedSet = New-Object System.Collections.Generic.HashSet[string] ($upnArray, [System.StringComparer]::OrdinalIgnoreCase)
 
 # 4. Process
+$total = $allUsers.Count
+$counter = 0
+
 $results = foreach ($u in $allUsers) {
+    $counter++
+    Write-Progress -Activity "Auditing 1,200+ Mailboxes" -Status "Processing $upn" -PercentComplete (($counter / $total) * 100)
+
     if ($null -eq $u.AssignedLicenses -or $u.UserType -ne 'Member') { continue }
+    
+    $upn = $u.UserPrincipalName
+    $isShared = $sharedSet.Contains($upn)
+    
+    $friendlyLics = foreach ($lic in $u.AssignedLicenses) {
+        $sku = $tenantSkus | Where-Object { $_.SkuId -eq $lic.SkuId }
+        if ($sku) { 
+            if ($skuMap.ContainsKey($sku.SkuPartNumber)) { $skuMap[$sku.SkuPartNumber] } 
+            else { $sku.SkuPartNumber }
+        }
+    }
+
+    $sizeGB = 0; $hasArchive = "No"
+    $m = Get-Mailbox -Identity $upn -ErrorAction SilentlyContinue
+    if ($m) {
+        $hasArchive = if ($m.ArchiveGuid -ne [Guid]::Empty -and $null -ne $m.ArchiveGuid) { "Yes" } else { "No" }
+        $stats = Get-MailboxStatistics -Identity $upn -ErrorAction SilentlyContinue
+        
+        # FINAL MATH FIX: ToString and casting to handle Deserialized objects
+        if ($null -ne $stats -and $null -ne $stats.TotalItemSize -and $null -ne $stats.TotalItemSize.Value) {
+            $rawString = $stats.TotalItemSize.Value.ToString()
+            # Remove any non-numeric characters just in case
+            $cleanString = $rawString -replace '[^0-9]', ''
+            if ($cleanString) {
+                $sizeGB = [math]::Round(([int64]$cleanString / 1GB), 2)
+            }
+        }
+    }
+
+    # Audit Logic
+    $status = "OK"; $notes = ""
+    if ($isShared) {
+        if ($sizeGB -gt 50 -and $friendlyLics -notmatch "Plan 2|E3|E5") { 
+            $status = "Action Required"; $notes = "Shared > 50GB needs Plan 2" 
+        }
+        elseif ($friendlyLics -match "E3|E5|Business Premium") { 
+            $status = "Optimization"; $notes = "Remove full license from Shared" 
+        }
+    } else {
+        if ($friendlyLics -contains "M365 E5" -and $friendlyLics -contains "O365 E3") { 
+            $status = "Redundant"; $notes = "Remove E3 (E5 covers it)" 
+        }
+        elseif ($friendlyLics -contains "M365 E3 (No Teams)" -and $friendlyLics -notmatch "Teams") { 
+            $status = "Warning"; $notes = "Check Teams licensing" 
+        }
+    }
+
+    [PSCustomObject]@{
+        User     = $upn
+        Name     = $u.DisplayName
+        Type     = if($isShared){"Shared"}else{"User"}
+        Licenses = $friendlyLics -join ", "
+        SizeGB   = $sizeGB
+        Archive  = $hasArchive
+        Status   = $status
+        Notes    = $notes
+    }
+}
+
+# 5. Export
+$results | Export-Csv -Path ".\M365_Audit_Report.csv" -NoTypeInformation -Encoding UTF8
+Write-Host "Done! Processed $($results.Count) objects." -ForegroundColor Cyan $u.UserType -ne 'Member') { continue }
     
     $upn = $u.UserPrincipalName
     $isShared = $sharedSet.Contains($upn)
