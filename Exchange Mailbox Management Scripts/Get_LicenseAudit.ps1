@@ -39,18 +39,6 @@ Param(
 # SETUP AND FUNCTIONS
 #=======================================================================================================================
 
-
-#region Script Parameters
-Param(
-    [string]$CsvOutputPath = ".\M365_License_Audit_Report_$(Get-Date -Format 'yyyy-MM-dd').csv",
-    [string]$LogFilePath = ".\M365_License_Audit_Log_$(Get-Date -Format 'yyyy-MM-dd').log"
-)
-#endregion
-
-#=======================================================================================================================
-# SETUP AND FUNCTIONS
-#=======================================================================================================================
-
 #region Logging Setup
 try {
     Start-Transcript -Path $LogFilePath -Append -ErrorAction Stop
@@ -200,4 +188,5 @@ finally {
     if (Get-MgContext) { Disconnect-MgGraph }
     Stop-Transcript
 }
+
 
