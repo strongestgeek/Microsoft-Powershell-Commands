@@ -16,82 +16,103 @@ $skuMap = @{
     "EMS"                     = "Enterprise Mobility + Security E3"
     "EMSPREMIUM"              = "Enterprise Mobility + Security E5"
     "OFFICESUBSCRIPTION"      = "Microsoft 365 Apps for Enterprise"
+}
 
 # 3. Gather Data
+Write-Host "Gathering tenant data..." -ForegroundColor Yellow
 $tenantSkus = Get-MgSubscribedSku -All
 $allUsers = Get-MgUser -All -Property UserPrincipalName, DisplayName, AssignedLicenses, UserType
 $sharedMailboxes = Get-EXOMailbox -RecipientTypeDetails SharedMailbox -ResultSize Unlimited
 
 # Fast Lookups
-$licenseLookup = @{}
-foreach ($u in $allUsers) { 
-    if ($u.UserPrincipalName) { $licenseLookup[$u.UserPrincipalName.ToLower()] = $u } 
-}
-
 $upnArray = [string[]]($sharedMailboxes.UserPrincipalName)
-$sharedSet = New-Object System.Collections.Generic.HashSet[string] ($upnArray, [System.StringComparer]::OrdinalIgnoreCase)
+$sharedSet = New-Object System.Collections.Generic.HashSet[string]($upnArray, [System.StringComparer]::OrdinalIgnoreCase)
 
-# 4. Process
+# 4. Process Users
 $total = $allUsers.Count
 $counter = 0
 
 $results = foreach ($u in $allUsers) {
     $counter++
-    Write-Progress -Activity "Auditing 1,200+ Mailboxes" -Status "Processing $upn" -PercentComplete (($counter / $total) * 100)
+    
+    # Skip unlicensed or guest users
+    if ($null -eq $u.AssignedLicenses -or $u.AssignedLicenses.Count -eq 0 -or $u.UserType -ne 'Member') { 
+        continue 
+    }
 
-    if ($null -eq $u.AssignedLicenses -or $u.UserType -ne 'Member') { continue }
-    
     $upn = $u.UserPrincipalName
+    Write-Progress -Activity "Auditing Microsoft 365 Licenses" -Status "Processing $upn" -PercentComplete (($counter / $total) * 100)
+
     $isShared = $sharedSet.Contains($upn)
-    
+
+    # Map SKUs to friendly names
     $friendlyLics = foreach ($lic in $u.AssignedLicenses) {
         $sku = $tenantSkus | Where-Object { $_.SkuId -eq $lic.SkuId }
         if ($sku) { 
-            if ($skuMap.ContainsKey($sku.SkuPartNumber)) { $skuMap[$sku.SkuPartNumber] } 
-            else { $sku.SkuPartNumber }
+            if ($skuMap.ContainsKey($sku.SkuPartNumber)) { 
+                $skuMap[$sku.SkuPartNumber] 
+            } else { 
+                $sku.SkuPartNumber 
+            }
         }
     }
 
-    $sizeGB = 0; $hasArchive = "No"
+    # Get mailbox details
+    $sizeGB = 0
+    $hasArchive = "No"
+    
     $m = Get-Mailbox -Identity $upn -ErrorAction SilentlyContinue
     if ($m) {
+        # Check for archive
         $hasArchive = if ($m.ArchiveGuid -ne [Guid]::Empty -and $null -ne $m.ArchiveGuid) { "Yes" } else { "No" }
-        $stats = Get-MailboxStatistics -Identity $upn -ErrorAction SilentlyContinue
         
-        # FINAL MATH FIX: ToString and casting to handle Deserialized objects
-        if ($null -ne $stats -and $null -ne $stats.TotalItemSize -and $null -ne $stats.TotalItemSize.Value) {
-            $rawString = $stats.TotalItemSize.Value.ToString()
-            # Remove any non-numeric characters just in case
-            $cleanString = $rawString -replace '[^0-9]', ''
-            if ($cleanString) {
-                $sizeGB = [math]::Round(([int64]$cleanString / 1GB), 2)
+        # Get mailbox size - handle deserialized objects properly
+        $stats = Get-MailboxStatistics -Identity $upn -ErrorAction SilentlyContinue
+        if ($null -ne $stats -and $null -ne $stats.TotalItemSize) {
+            try {
+                # Convert to string, extract bytes, calculate GB
+                $sizeString = $stats.TotalItemSize.Value.ToString()
+                # Match pattern like "1.234 GB (1,234,567,890 bytes)"
+                if ($sizeString -match '\(([0-9,]+) bytes\)') {
+                    $bytes = [int64]($matches[1] -replace ',', '')
+                    $sizeGB = [math]::Round(($bytes / 1GB), 2)
+                }
+            } catch {
+                Write-Warning "Could not parse size for $upn"
             }
         }
     }
 
     # Audit Logic
-    $status = "OK"; $notes = ""
+    $status = "OK"
+    $notes = ""
+    
     if ($isShared) {
         if ($sizeGB -gt 50 -and $friendlyLics -notmatch "Plan 2|E3|E5") { 
-            $status = "Action Required"; $notes = "Shared > 50GB needs Plan 2" 
+            $status = "Action Required"
+            $notes = "Shared mailbox >50GB needs Plan 2 or E3/E5 license" 
         }
         elseif ($friendlyLics -match "E3|E5|Business Premium") { 
-            $status = "Optimization"; $notes = "Remove full license from Shared" 
+            $status = "Optimization"
+            $notes = "Consider removing full license (shared mailbox doesn't require one under 50GB)" 
         }
     } else {
-        if ($friendlyLics -contains "M365 E5" -and $friendlyLics -contains "O365 E3") { 
-            $status = "Redundant"; $notes = "Remove E3 (E5 covers it)" 
+        if ($friendlyLics -contains "Microsoft 365 E5" -and $friendlyLics -contains "Office 365 E3") { 
+            $status = "Redundant"
+            $notes = "Remove E3 license (E5 includes all E3 features)" 
         }
-        elseif ($friendlyLics -contains "M365 E3 (No Teams)" -and $friendlyLics -notmatch "Teams") { 
-            $status = "Warning"; $notes = "Check Teams licensing" 
+        elseif ($friendlyLics -contains "Microsoft 365 E3 (no Teams)" -and $friendlyLics -notmatch "Teams") { 
+            $status = "Warning"
+            $notes = "User has E3 without Teams - verify Teams licensing" 
         }
     }
 
+    # Output object
     [PSCustomObject]@{
         User     = $upn
         Name     = $u.DisplayName
-        Type     = if($isShared){"Shared"}else{"User"}
-        Licenses = $friendlyLics -join ", "
+        Type     = if ($isShared) { "Shared Mailbox" } else { "User Mailbox" }
+        Licenses = ($friendlyLics | Select-Object -Unique) -join ", "
         SizeGB   = $sizeGB
         Archive  = $hasArchive
         Status   = $status
@@ -99,45 +120,16 @@ $results = foreach ($u in $allUsers) {
     }
 }
 
-# 5. Export
-$results | Export-Csv -Path ".\M365_Audit_Report.csv" -NoTypeInformation -Encoding UTF8
-Write-Host "Done! Processed $($results.Count) objects." -ForegroundColor Cyan $u.UserType -ne 'Member') { continue }
-    
-    $upn = $u.UserPrincipalName
-    $isShared = $sharedSet.Contains($upn)
-    
-    $friendlyLics = foreach ($lic in $u.AssignedLicenses) {
-        $sku = $tenantSkus | Where-Object { $_.SkuId -eq $lic.SkuId }
-        if ($sku) { $skuMap[$sku.SkuPartNumber] ?? $sku.SkuPartNumber }
-    }
+Write-Progress -Activity "Auditing Microsoft 365 Licenses" -Completed
 
-    $sizeGB = 0; $hasArchive = "No"
-    $m = Get-Mailbox -Identity $upn -ErrorAction SilentlyContinue
-    if ($m) {
-        $hasArchive = if ($m.ArchiveGuid -ne [Guid]::Empty) { "Yes" } else { "No" }
-        $stats = Get-MailboxStatistics -Identity $upn -ErrorAction SilentlyContinue
-        # THE FIX: Cast to [int64] to prevent op_Division error
-        if ($null -ne $stats.TotalItemSize -and $null -ne $stats.TotalItemSize.Value) {
-            $sizeGB = [math]::Round(([int64]$stats.TotalItemSize.Value / 1GB), 2)
-        }
-    }
+# 5. Export Results
+$outputPath = ".\M365_Audit_Report_$(Get-Date -Format 'yyyyMMdd_HHmmss').csv"
+$results | Export-Csv -Path $outputPath -NoTypeInformation -Encoding UTF8
 
-    $status = "OK"; $notes = ""
-    if ($isShared) {
-        if ($sizeGB -gt 50 -and $friendlyLics -notmatch "Plan 2|E3|E5") { $status = "Action Required"; $notes = "Shared > 50GB needs License" }
-        elseif ($friendlyLics -match "E3|E5|Business Premium") { $status = "Optimization"; $notes = "Remove full license from Shared" }
-    } else {
-        if ($friendlyLics -contains "M365 E5" -and $friendlyLics -contains "O365 E3") { $status = "Redundant"; $notes = "Remove E3" }
-        elseif ($friendlyLics -contains "M365 E3 (No Teams)" -and $friendlyLics -notmatch "Teams") { $status = "Warning"; $notes = "Missing Teams" }
-    }
-
-    [PSCustomObject]@{
-        User = $upn; Name = $u.DisplayName; Type = if($isShared){"Shared"}else{"User"}
-        Licenses = $friendlyLics -join ", "; SizeGB = $sizeGB; Archive = $hasArchive
-        Status = $status; Notes = $notes
-    }
-}
-
-# 5. Export
-$results | Export-Csv -Path ".\M365_Audit_Report.csv" -NoTypeInformation
-Write-Host "Done! Report saved to M365_Audit_Report.csv" -ForegroundColor Cyan
+# Summary
+$summary = $results | Group-Object Status | Select-Object Name, Count
+Write-Host "`nAudit Complete!" -ForegroundColor Green
+Write-Host "Total objects processed: $($results.Count)" -ForegroundColor Cyan
+Write-Host "`nStatus Summary:" -ForegroundColor Yellow
+$summary | Format-Table -AutoSize
+Write-Host "Report saved to: $outputPath" -
