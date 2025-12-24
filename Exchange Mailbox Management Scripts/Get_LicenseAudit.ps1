@@ -4,9 +4,18 @@ Connect-MgGraph -Scopes "User.Read.All", "Directory.Read.All"
 
 # 2. Setup License Mapping
 $skuMap = @{
-    "AAD_PREMIUM"           = "Entra ID P1"; "AAD_PREMIUM_P2" = "Entra ID P2"
-    "ENTERPRISEPREMIUM"     = "M365 E5"; "ENTERPRISEPACK"     = "O365 E3"
-    "M365_BUSINESS_PREMIUM" = "Business Premium"; "SPE_E3_NOPSTN" = "M365 E3 (No Teams)"
+    "AAD_PREMIUM"             = "Microsoft Entra ID P1"
+    "AAD_PREMIUM_P2"          = "Microsoft Entra ID P2"
+    "ENTERPRISEPREMIUM"       = "Microsoft 365 E5"
+    "ENTERPRISEPACK"          = "Office 365 E3"
+    "STANDARDPACK"            = "Office 365 E1"
+    "DESKLESSPACK"            = "Microsoft 365 F3"
+    "M365_BUSINESS_PREMIUM"   = "Microsoft 365 Business Premium"
+    "M365_BUSINESS_STANDARD"  = "Microsoft 365 Business Standard"
+    "SPE_E3_NOPSTN"           = "Microsoft 365 E3 (no Teams)"
+    "EMS"                     = "Enterprise Mobility + Security E3"
+    "EMSPREMIUM"              = "Enterprise Mobility + Security E5"
+    "OFFICESUBSCRIPTION"      = "Microsoft 365 Apps for Enterprise"
 }
 
 # 3. Gather Data
