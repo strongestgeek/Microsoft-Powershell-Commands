@@ -58,36 +58,29 @@ $skuMap = @{
     
     # Microsoft 365
     "SPE_E3"                              = "Microsoft 365 E3"
-    "SPE_E3_NOPSTN"                       = "Microsoft 365 E3 (No Teams)"
+    "Microsoft_365_E3_(no_Teams)"         = "Microsoft 365 E3 (No Teams)"
     
     # Office 365
     "STANDARDPACK"                        = "Office 365 E1"
     
     # Defender
     "ATP_ENTERPRISE"                      = "Microsoft Defender for Office 365 Plan 1"
-    "ATP_ENTERPRISE_FACULTY"              = "Microsoft Defender for Office 365 Plan 1"
     "THREAT_INTELLIGENCE"                 = "Microsoft Defender for Office 365 Plan 2"
-    "DEFENDER_SUITE"                      = "Microsoft Defender Suite"
-    "DEFENDER_ENDPOINT_P2"                = "Microsoft Defender for Endpoint P2"
-    "MDATP_XPLAT"                         = "Microsoft Defender for Endpoint"
-    "DEFENDER_VULNERABILITY_MANAGEMENT"   = "Microsoft Defender Vulnerability Management Add-on"
+    "IDENTITY_THREAT_PROTECTION"          = "Microsoft Defender Suite"
+    "TVM_Premium_Add_on"                  = "Microsoft Defender Vulnerability Management Add-on"
     
     # Teams
-    "TEAMS_ENTERPRISE"                    = "Microsoft Teams Enterprise"
-    "MCOSTANDARD"                         = "Microsoft Teams"
-    "TEAMS1"                              = "Microsoft Teams"
+    "Microsoft_Teams_Enterprise_New"      = "Microsoft Teams Enterprise"
     
     # Ignored (Visio, Project, etc.)
     "VISIOCLIENT"                         = "Visio Plan 2"
     "PROJECTPROFESSIONAL"                 = "Project Plan 3"
-    "POWER_BI_PRO"                        = "Power BI Pro"
 }
 
 # Licenses to ignore in compliance checks
 $ignoredLicenses = @(
     "Visio Plan 2",
-    "Project Plan 3",
-    "Power BI Pro"
+    "Project Plan 3"
 )
 
 # Expected licenses for different user types
